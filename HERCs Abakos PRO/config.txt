@@ -1,0 +1,11 @@
+configuration [
+    multitimbral [1]
+    stripes [3]
+    oscillators [4]
+    head_room [131072]
+    dsp_line_space [176400]
+    midi_in [0]
+    no_volume_reset []
+    latency_block [2048]
+    dco_blocking_freq [190]
+]

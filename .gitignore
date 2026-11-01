@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+cmake-build-*/
+.DS_Store
+**/.DS_Store
+
+# Environment & signing secrets
+.env
+.env.local
+
+# Exclude proprietary 32-bit Windows binaries & non-redistributable docs from public repo
+# (while keeping redistributable *.txt factory presets and *.scl.tun microtonal scales)
+HERCs Abakos PRO/*.dll
+HERCs Abakos PRO/*.exe
+HERCs Abakos PRO/*.rtf
+HERCs Abakos PRO/*.URL
+HERCs Abakos PRO/Instruction Manual/
+resources/bitmaps/

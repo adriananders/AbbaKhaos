@@ -1,0 +1,237 @@
+name: Build & Release AbbaKhaos
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*', '*' ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ published, created ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: macOS (AU + VST3)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake (Universal arm64 + x86_64)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build AU, VST3 & Unit Tests
+        run: |
+          cmake --build build --config Release --target AbbaKhaos_AU AbbaKhaos_VST3 AbbaKhaosTests -j4
+
+      - name: Run Unit Tests
+        run: ./build/AbbaKhaosTests
+
+      - name: Bundle Factory Presets & Tunings into AU and VST3
+        run: |
+          for BUNDLE in "build/AbbaKhaos_artefacts/Release/AU/AbbaKhaos.component" "build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3"; do
+            DEST="$BUNDLE/Contents/Resources/HERCs Abakos PRO"
+            mkdir -p "$DEST"
+            cp -R "HERCs Abakos PRO/a" "HERCs Abakos PRO/b" "HERCs Abakos PRO/c" "HERCs Abakos PRO/d" "HERCs Abakos PRO/Tuning Files" "$DEST/"
+            cp "HERCs Abakos PRO/config.txt" "HERCs Abakos PRO/setup.txt" "$DEST/"
+          done
+
+      - name: Import Developer ID Certificate into Temporary Keychain
+        if: github.event_name != 'pull_request'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          CERT_PATH="$RUNNER_TEMP/developer_id.p12"
+
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          rm -f "$CERT_PATH"
+
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Code Sign with Developer ID (Hardened Runtime)
+        if: github.event_name != 'pull_request'
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+        run: |
+          for BUNDLE in "build/AbbaKhaos_artefacts/Release/AU/AbbaKhaos.component" "build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3"; do
+            codesign --force --deep --options runtime --timestamp --sign "$APPLE_DEVELOPER_ID" "$BUNDLE"
+            codesign --verify --deep --strict --verbose=2 "$BUNDLE"
+          done
+
+      - name: Notarize & Staple with Apple Notary Service
+        if: github.event_name != 'pull_request'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          mkdir -p notarize
+          ditto -c -k --keepParent "build/AbbaKhaos_artefacts/Release/AU/AbbaKhaos.component" notarize/AbbaKhaos-AU.zip
+          ditto -c -k --keepParent "build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3" notarize/AbbaKhaos-VST3.zip
+
+          for ZIP in notarize/AbbaKhaos-AU.zip notarize/AbbaKhaos-VST3.zip; do
+            xcrun notarytool submit "$ZIP" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait --timeout 30m
+          done
+
+          xcrun stapler staple "build/AbbaKhaos_artefacts/Release/AU/AbbaKhaos.component"
+          xcrun stapler staple "build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3"
+          xcrun stapler validate "build/AbbaKhaos_artefacts/Release/AU/AbbaKhaos.component"
+          xcrun stapler validate "build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3"
+          spctl -a -vvv -t install "build/AbbaKhaos_artefacts/Release/AU/AbbaKhaos.component" || true
+
+      - name: Ad-hoc Sign (Pull Requests Only)
+        if: github.event_name == 'pull_request'
+        run: |
+          for BUNDLE in "build/AbbaKhaos_artefacts/Release/AU/AbbaKhaos.component" "build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3"; do
+            codesign --force --deep -s - "$BUNDLE"
+          done
+
+      - name: Package macOS Archive
+        run: |
+          mkdir -p dist/macOS
+          cp -R "build/AbbaKhaos_artefacts/Release/AU/AbbaKhaos.component" dist/macOS/
+          cp -R "build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3" dist/macOS/
+          cp LICENSE README.md dist/macOS/
+          cd dist/macOS
+          ditto -c -k --keepParent . ../../AbbaKhaos-macOS-AU-VST3.zip
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AbbaKhaos-macOS-AU-VST3
+          path: AbbaKhaos-macOS-AU-VST3.zip
+
+      - name: Clean Up Temporary Keychain
+        if: always() && github.event_name != 'pull_request'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
+  build-windows:
+    name: Windows (VST3)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 & Unit Tests
+        run: cmake --build build --config Release --target AbbaKhaos_VST3 AbbaKhaosTests -j4
+
+      - name: Run Unit Tests
+        run: .\build\Release\AbbaKhaosTests.exe
+
+      - name: Bundle Factory Presets & Tunings into VST3
+        shell: pwsh
+        run: |
+          $Vst3Bundle = "build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3"
+          $Dest = "$Vst3Bundle/Contents/Resources/HERCs Abakos PRO"
+          New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+          Copy-Item -Recurse -Force "HERCs Abakos PRO/a", "HERCs Abakos PRO/b", "HERCs Abakos PRO/c", "HERCs Abakos PRO/d", "HERCs Abakos PRO/Tuning Files" $Dest
+          Copy-Item -Force "HERCs Abakos PRO/config.txt", "HERCs Abakos PRO/setup.txt" $Dest
+
+          New-Item -ItemType Directory -Force -Path "dist/Windows" | Out-Null
+          Copy-Item -Recurse -Force $Vst3Bundle "dist/Windows/"
+          Copy-Item -Force LICENSE, README.md "dist/Windows/"
+          Compress-Archive -Path "dist/Windows/*" -DestinationPath "AbbaKhaos-Windows-VST3.zip" -Force
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AbbaKhaos-Windows-VST3
+          path: AbbaKhaos-Windows-VST3.zip
+
+  build-linux:
+    name: Linux (VST3)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Audio & GUI Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libasound2-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libgl1-mesa-dev
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 & Unit Tests
+        run: cmake --build build --config Release --target AbbaKhaos_VST3 AbbaKhaosTests -j$(nproc)
+
+      - name: Run Unit Tests (Headless Xvfb)
+        run: xvfb-run -a ./build/AbbaKhaosTests
+
+      - name: Bundle Factory Presets & Tunings into VST3
+        run: |
+          VST3_BUNDLE="build/AbbaKhaos_artefacts/Release/VST3/AbbaKhaos.vst3"
+          DEST="$VST3_BUNDLE/Contents/Resources/HERCs Abakos PRO"
+          mkdir -p "$DEST"
+          cp -R "HERCs Abakos PRO/a" "HERCs Abakos PRO/b" "HERCs Abakos PRO/c" "HERCs Abakos PRO/d" "HERCs Abakos PRO/Tuning Files" "$DEST/"
+          cp "HERCs Abakos PRO/config.txt" "HERCs Abakos PRO/setup.txt" "$DEST/"
+
+          mkdir -p dist/Linux
+          cp -R "$VST3_BUNDLE" dist/Linux/
+          cp LICENSE README.md dist/Linux/
+          cd dist/Linux
+          zip -r ../../AbbaKhaos-Linux-VST3.zip .
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AbbaKhaos-Linux-VST3
+          path: AbbaKhaos-Linux-VST3.zip
+
+  release:
+    name: Create GitHub Release
+    needs: [ build-macos, build-windows, build-linux ]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Built Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/AbbaKhaos-macOS-AU-VST3.zip
+            release-assets/AbbaKhaos-Windows-VST3.zip
+            release-assets/AbbaKhaos-Linux-VST3.zip
