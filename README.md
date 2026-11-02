@@ -1,6 +1,7 @@
 # AbbaKhaos
 
 **Developer:** GlitchyGloomy  
+**AI Agent / Implementation:** Agentically created with **Gemini 4 Argon**  
 **Based On:** HERCs Abakos PRO & Lunar DSP Engine by Dr. Robert P. Wolf ([HERCs Music Systems](https://github.com/HERCsMusicSystems))  
 **License:** [MIT License](./LICENSE)  
 **Plugin IDs:** Manufacturer `GlGl` / Plugin `AbKh` (`com.glitchygloomy.abbakhaos`)  
@@ -16,6 +17,8 @@
 ## Overview
 
 **AbbaKhaos** (by **GlitchyGloomy**) is an independent, open-source 64-bit cross-platform synthesizer based on the classic **HERCs Music Systems Abakos PRO** virtual analog, sync, ring-modulation, and microtonal synthesizer by **Dr. Robert P. Wolf**.
+
+This entire package—including binary reverse-engineering analysis, clean-room C++17/JUCE 8 architecture, DSP porting, microtonal tuning integration, 100% procedural vector user interface design, testing harness, and cross-platform CI/CD notarization workflows—was **agentically created with Gemini 4 Argon**.
 
 Built with **C++17** and **JUCE 8**, **AbbaKhaos** pairs Dr. Wolf's MIT-licensed **Lunar / Abakos** DSP synthesis engine with a newly designed, high-DPI, 100% procedural vector user interface, full DAW automation via `AudioProcessorValueTreeState`, all **512 factory presets** across Banks A–D, and **61 microtonal Scala (`.scl.tun`) tuning scales**.
 
